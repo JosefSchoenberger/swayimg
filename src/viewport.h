@@ -55,7 +55,7 @@ struct viewport {
     enum vp_scale def_scale;  ///< Default image scale
 
     double scale;         ///< Scale factor of the image
-    ssize_t x, y;         ///< Image position on the window surface
+    double x, y;          ///< Image position on the window surface
     size_t width, height; ///< Window size
 
     argb_t bkg_window; ///< Window background mode/color
@@ -125,11 +125,14 @@ bool viewport_scale_def(struct viewport* vp, const char* scale);
 const char* viewport_scale_switch(struct viewport* vp);
 
 /**
- * Set absolute scale of the image.
+ * Set absolute scale of the image, zooming into / out of the center position.
  * @param vp viewport context
  * @param scale scale factor (1.0 = 100%)
+ * @param center_x the x position in viewport to zoom into / out of (in pixels)
+ * @param center_y the y position in viewport to zoom into / out of (in pixels)
  */
-void viewport_scale_abs(struct viewport* vp, double scale);
+void viewport_scale_abs(struct viewport* vp, double scale, double center_x,
+                        double center_y);
 
 /**
  * Start/stop animation.

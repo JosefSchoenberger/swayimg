@@ -5,6 +5,7 @@
 #include "viewer.h"
 
 #include "application.h"
+#include "array.h"
 #include "cache.h"
 #include "imglist.h"
 #include "info.h"
@@ -13,17 +14,19 @@
 #include "viewport.h"
 
 #include <pthread.h>
+#include <string.h>
 
 /** Viewer context. */
 struct viewer {
     struct viewport vp; ///< Viewport
     struct keybind* kb; ///< Key bindings
 
-    struct cache* history; ///< Recently viewed images
-    struct cache* preload; ///< Preloaded images
-    pthread_t preload_tid; ///< Preload thread id
-    bool preload_active;   ///< Preload in progress flag
-    bool loop_list;        ///< Loop image list
+    struct cache* history;   ///< Recently viewed images
+    struct cache* preload;   ///< Preloaded images
+    pthread_t preload_tid;   ///< Preload thread id
+    bool preload_active;     ///< Preload in progress flag
+    bool loop_list;          ///< Loop image list
+    size_t mouse_x, mouse_y; ///< Last known mouse position, SIZE_MAX if unknown
 };
 
 /** Global viewer context. */
@@ -401,27 +404,55 @@ static void zoom_image(const char* params)
     } else if (viewport_scale_def(&ctx.vp, params)) {
         name = params;
     } else {
+        struct str_slice param_slices[2];
+        size_t param_slice_num;
+
+        param_slice_num =
+            str_split(params, ' ', param_slices, ARRAY_SIZE(param_slices));
+
         double scale = 0.0;
 
         if (params[0] == '+' || params[0] == '-') {
             // relative
             ssize_t delta;
-            if (str_to_num(params, 0, &delta, 0) && delta != 0 &&
-                delta > -1000 && delta < 1000) {
+            if (str_to_num(param_slices[0].value, param_slices[0].len, &delta,
+                           0) &&
+                delta != 0 && delta > -1000 && delta < 1000) {
                 scale = ctx.vp.scale + (ctx.vp.scale / 100) * delta;
             }
         } else {
             // percent
             ssize_t percent;
-            if (str_to_num(params, 0, &percent, 0) && percent > 0 &&
-                percent < 100000) {
+            if (str_to_num(param_slices[0].value, param_slices[0].len, &percent,
+                           0) &&
+                percent > 0 && percent < 100000) {
                 scale = (double)percent / 100;
             }
         }
 
         if (scale != 0) {
-            viewport_scale_abs(&ctx.vp, scale);
-            info_update(info_scale, "%.0f%%", ctx.vp.scale * 100);
+            double center_x = -1, center_y = -1;
+            // If mouse is unsupported (e.g. DRM backend or no mouse movement
+            // yet), use center position instead.
+            if (param_slice_num == 1 ||
+                strncmp(param_slices[1].value, "center", param_slices[1].len) ==
+                    0 ||
+                ctx.mouse_x == SIZE_MAX || ctx.mouse_y == SIZE_MAX) {
+                center_x = (double)ctx.vp.width / 2.0;
+                center_y = (double)ctx.vp.height / 2.0;
+            } else if (strncmp(param_slices[1].value, "cursor",
+                               param_slices[1].len) == 0) {
+                center_x = ctx.mouse_x;
+                center_y = ctx.mouse_y;
+            }
+
+            if (center_x != -1) {
+                viewport_scale_abs(&ctx.vp, scale, center_x, center_y);
+                info_update(info_scale, "%.0f%%", ctx.vp.scale * 100);
+            } else {
+                info_update(info_status, "Invalid second zoom parameter: %.*s",
+                            (int)param_slices[1].len, param_slices[1].value);
+            }
         } else {
             info_update(info_status, "Invalid zoom operation: %s", params);
         }
@@ -491,6 +522,9 @@ static void on_mouse_move(uint8_t mods, uint32_t btn,
                           __attribute__((unused)) size_t y, ssize_t dx,
                           ssize_t dy)
 {
+    ctx.mouse_x = x;
+    ctx.mouse_y = y;
+
     const struct keybind* kb = keybind_find(ctx.kb, MOUSE_TO_XKB(btn), mods);
     if (kb && kb->actions->type == action_drag) {
         // move viewport
@@ -669,6 +703,9 @@ void viewer_init(const struct config* cfg, struct mode* handlers)
 
     // load key bindings
     ctx.kb = keybind_load(config_section(cfg, CFG_KEYS_VIEWER));
+
+    ctx.mouse_x = SIZE_MAX;
+    ctx.mouse_y = SIZE_MAX;
 
     handlers->on_activate = on_activate;
     handlers->on_deactivate = on_deactivate;
